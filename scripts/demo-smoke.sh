@@ -14,7 +14,8 @@ if [[ "${SKIP_MONITORING:-no}" != yes ]]; then
 fi
 
 docker compose --env-file .env --profile jobs run --rm backup
-backup_id=$(tr -d '\r\n' < runtime/backups/latest.txt)
+backup_id=$(docker compose --env-file .env --profile jobs run --rm --entrypoint sh backup \
+  -c 'tr -d "\r\n" < /backups/latest.txt')
 
 BACKUP_ID="${backup_id}" \
 RESTORE_DATABASE=sozyv_restore_test \
@@ -26,8 +27,9 @@ row_count=$(docker compose --env-file .env exec -T demo-postgres \
   psql -U postgres -d sozyv_restore_test -Atc 'SELECT count(*) FROM demo_message;')
 [[ "${row_count}" == 2 ]]
 
-(cd "runtime/backups/${backup_id}" && sha256sum -c SHA256SUMS)
-grep -q 'demo-message.txt' < <(tar -tzf "runtime/backups/${backup_id}/attachments.tar.gz")
+docker compose --env-file .env --profile jobs run --rm --entrypoint sh \
+  -e BACKUP_ID="${backup_id}" backup -c \
+  'cd "/backups/${BACKUP_ID}" && sha256sum -c SHA256SUMS && tar -tzf attachments.tar.gz | grep -q demo-message.txt'
 
 docker compose --env-file .env exec -T demo-postgres dropdb -U postgres sozyv_restore_test
 
