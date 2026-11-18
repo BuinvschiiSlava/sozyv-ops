@@ -1,0 +1,14 @@
+networks:
+  sozyv:
+    name: ${SOZYV_NETWORK_NAME:?Set SOZYV_NETWORK_NAME to the existing Sozyv Docker network}
+    external: true
+
+services:
+  node-exporter:
+    volumes:
+      - /:/host:ro,rslave
+
+volumes:
+  attachments:
+    name: ${SOZYV_FILES_VOLUME:?Set SOZYV_FILES_VOLUME to the existing Sozyv attachment volume}
+    external: true

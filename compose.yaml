@@ -1,0 +1,263 @@
+name: ${COMPOSE_PROJECT_NAME:-sozyv-ops}
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.13.5
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    networks: [ops]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    logging: &bounded-logs
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SERVER_ROOT_URL: http://localhost:${GRAFANA_PORT:-3000}
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks: [ops]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    logging: *bounded-logs
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    networks: [ops]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    logging: *bounded-logs
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.29.1
+    restart: unless-stopped
+    command: [--config.file=/etc/blackbox/blackbox.yml]
+    volumes:
+      - ./monitoring/blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    networks: [ops, sozyv]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    logging: *bounded-logs
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_URI: ${POSTGRES_HOST:-demo-postgres}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-sozyv}?sslmode=disable
+      DATA_SOURCE_USER: ${POSTGRES_EXPORTER_USER:-postgres}
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD:?Set POSTGRES_EXPORTER_PASSWORD in .env}
+    networks: [ops, sozyv]
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    logging: *bounded-logs
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    profiles: [host]
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.textfile.directory=/textfile
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    volumes:
+      - /:/host:ro
+      - ${METRICS_DIR:-./runtime/metrics}:/textfile:ro
+    networks: [ops]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    logging: *bounded-logs
+
+  cadvisor:
+    image: ghcr.io/google/cadvisor:v0.60.6
+    profiles: [host]
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+    networks: [ops]
+    security_opt: [no-new-privileges:true]
+    logging: *bounded-logs
+
+  backup:
+    image: postgres:18-alpine
+    profiles: [jobs]
+    entrypoint: [/opt/sozyv/backup.sh]
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-demo-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-sozyv}
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}
+      RETENTION_DAYS: ${RETENTION_DAYS:-14}
+      PRUNE_OLD_BACKUPS: ${PRUNE_OLD_BACKUPS:-false}
+    volumes:
+      - ./scripts/backup.sh:/opt/sozyv/backup.sh:ro
+      - attachments:/source/attachments:ro
+      - ${SOZYV_CONFIG_DIR:-./demo/config}:/source/config:ro
+      - ${BACKUP_DIR:-./runtime/backups}:/backups
+      - ${METRICS_DIR:-./runtime/metrics}:/metrics
+    networks: [sozyv]
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+
+  restore:
+    image: postgres:18-alpine
+    profiles: [jobs]
+    entrypoint: [/opt/sozyv/restore.sh]
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST:-demo-postgres}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB:-sozyv}
+      POSTGRES_ADMIN_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_ADMIN_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}
+      BACKUP_ID: ${BACKUP_ID:-}
+      RESTORE_DATABASE: ${RESTORE_DATABASE:-}
+      CONFIRM_RESTORE: ${CONFIRM_RESTORE:-NO}
+      DROP_RESTORE_DATABASE: ${DROP_RESTORE_DATABASE:-NO}
+      ALLOW_IN_PLACE_RESTORE: ${ALLOW_IN_PLACE_RESTORE:-NO}
+      RESTORE_ATTACHMENTS: ${RESTORE_ATTACHMENTS:-NO}
+    volumes:
+      - ./scripts/restore.sh:/opt/sozyv/restore.sh:ro
+      - ${BACKUP_DIR:-./runtime/backups}:/backups:ro
+      - ${METRICS_DIR:-./runtime/metrics}:/metrics
+      - restore_attachments:/restore/attachments
+    networks: [sozyv]
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+
+  demo-postgres:
+    image: postgres:18-alpine
+    profiles: [demo]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sozyv}
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?Set POSTGRES_ADMIN_PASSWORD in .env}
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql
+      - ./demo/init.sql:/docker-entrypoint-initdb.d/10-demo.sql:ro
+    networks: [sozyv]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+    logging: *bounded-logs
+
+  demo-app:
+    image: nginx:1.29-alpine
+    profiles: [demo]
+    volumes:
+      - ./demo/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./demo/index.html:/usr/share/nginx/html/index.html:ro
+    networks: [sozyv]
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m,uid=101,gid=101,mode=1777
+      - /var/run:size=4m,uid=101,gid=101,mode=1777
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETGID, SETUID]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/api/v1/health]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *bounded-logs
+
+  demo-seed:
+    image: alpine:3.22
+    profiles: [demo]
+    command:
+      - sh
+      - -ec
+      - |
+        mkdir -p /attachments
+        printf 'Sozyv Ops demo attachment\n' > /attachments/demo-message.txt
+    volumes:
+      - attachments:/attachments
+    networks: [sozyv]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+networks:
+  ops:
+    driver: bridge
+  sozyv:
+    name: ${SOZYV_NETWORK_NAME:-sozyv-ops}
+    driver: bridge
+    internal: true
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  alertmanager_data:
+  demo_postgres_data:
+  restore_attachments:
+  attachments:
+    name: ${SOZYV_FILES_VOLUME:-sozyv-ops-demo-files}

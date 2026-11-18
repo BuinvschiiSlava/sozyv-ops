@@ -1,0 +1,51 @@
+name: validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Prepare environment
+        run: |
+          cp .env.example .env
+          chmod +x scripts/*.sh
+          ./scripts/render-targets.sh
+
+      - name: Static validation
+        run: |
+          bash -n scripts/*.sh
+          shellcheck -x scripts/*.sh
+          jq empty monitoring/grafana/dashboards/sozyv-ops.json
+          jq empty monitoring/prometheus/generated/blackbox.json
+          docker compose --env-file .env --profile demo --profile jobs --profile host config --quiet
+
+      - name: Validate Prometheus and Alertmanager
+        run: |
+          docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" \
+            --entrypoint /bin/promtool prom/prometheus:v3.13.5 \
+            check config /etc/prometheus/prometheus.yml
+          docker run --rm -v "$PWD/monitoring/alertmanager:/etc/alertmanager:ro" \
+            --entrypoint amtool prom/alertmanager:v0.35.0 \
+            check-config /etc/alertmanager/alertmanager.yml
+
+      - name: Backup and restore integration test
+        env:
+          SKIP_MONITORING: "yes"
+        run: ./scripts/demo-smoke.sh
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose --env-file .env --profile demo --profile jobs logs --no-color --tail 200
+
+      - name: Clean up
+        if: always()
+        run: docker compose --env-file .env --profile demo --profile jobs --profile host down --volumes --remove-orphans

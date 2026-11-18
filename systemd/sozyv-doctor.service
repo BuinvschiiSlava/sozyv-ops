@@ -1,0 +1,10 @@
+[Unit]
+Description=Run non-destructive Sozyv diagnostics
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sozyv-ops
+ExecStart=/opt/sozyv-ops/scripts/doctor.sh
+TimeoutStartSec=2min

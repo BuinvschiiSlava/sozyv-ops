@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Sozyv backup every night
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=sozyv-backup.service
+
+[Install]
+WantedBy=timers.target

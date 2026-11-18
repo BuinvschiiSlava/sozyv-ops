@@ -1,0 +1,105 @@
+groups:
+  - name: sozyv-availability
+    rules:
+      - alert: SozyvUnavailable
+        expr: probe_success{job="sozyv-http"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Sozyv health endpoint is unavailable
+          description: The blackbox probe has failed for more than two minutes.
+
+      - alert: SozyvSlowResponse
+        expr: probe_duration_seconds{job="sozyv-http"} > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sozyv response time is above two seconds
+          description: Investigate application load, PostgreSQL latency and host saturation.
+
+      - alert: PostgresExporterDown
+        expr: up{job="postgres"} == 0 or pg_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL cannot be monitored
+          description: The exporter is unavailable or cannot connect to the Sozyv database.
+
+      - alert: TlsCertificateExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry{job="sozyv-http"} - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: Sozyv TLS certificate expires in less than 14 days
+          description: Renew the certificate and verify the full chain before expiry.
+
+  - name: sozyv-host
+    rules:
+      - alert: HostDiskAlmostFull
+        expr: 100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs"}) > 90
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Host filesystem usage is above 90 percent
+          description: Free space before PostgreSQL or Docker runs out of writable storage.
+
+      - alert: HostMemoryPressure
+        expr: 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Host memory usage is above 90 percent
+          description: Inspect container memory and restart only the confirmed offender.
+
+      - alert: ContainerRestartLoop
+        expr: changes(container_start_time_seconds{name=~"sozyv-.+"}[15m]) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: A Sozyv container repeatedly restarts
+          description: Read the container logs and run the diagnostic script before changing state.
+
+  - name: sozyv-backup
+    rules:
+      - alert: SozyvBackupMissing
+        expr: absent(sozyv_backup_last_success_timestamp_seconds)
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: No successful Sozyv backup metric was found
+          description: Run a backup and confirm that node_exporter reads the textfile metric.
+
+      - alert: SozyvBackupStale
+        expr: time() - sozyv_backup_last_success_timestamp_seconds > 93600
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: The latest successful Sozyv backup is older than 26 hours
+          description: Check the systemd timer, available disk space and PostgreSQL connectivity.
+
+      - alert: SozyvBackupFailed
+        expr: sozyv_backup_last_run_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: The last Sozyv backup attempt failed
+          description: Inspect the backup job output; do not delete the previous valid archive.
+
+      - alert: SozyvDoctorFailed
+        expr: sozyv_doctor_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Sozyv diagnostic checks found a failure
+          description: Open the diagnostic report and follow the incident runbook.

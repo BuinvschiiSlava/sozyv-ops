@@ -1,0 +1,10 @@
+.env
+.state/
+runtime/backups/*
+runtime/metrics/*
+!runtime/backups/.gitkeep
+!runtime/metrics/.gitkeep
+monitoring/prometheus/generated/*.json
+!monitoring/prometheus/generated/.gitkeep
+*.log
+*.tmp

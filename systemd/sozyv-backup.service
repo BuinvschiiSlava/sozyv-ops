@@ -1,0 +1,14 @@
+[Unit]
+Description=Create and verify a Sozyv backup
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sozyv-ops
+ExecStart=/usr/bin/docker compose -f compose.yaml -f compose.production.yaml --profile jobs run --rm backup
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=45min
