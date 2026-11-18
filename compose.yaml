@@ -157,7 +157,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
     cap_drop: [ALL]
-    cap_add: [DAC_READ_SEARCH]
+    cap_add: [DAC_READ_SEARCH, DAC_OVERRIDE]
     security_opt: [no-new-privileges:true]
     pids_limit: 128
 
@@ -187,6 +187,7 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
     cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH, DAC_OVERRIDE]
     security_opt: [no-new-privileges:true]
     pids_limit: 128
 
